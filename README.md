@@ -51,7 +51,8 @@ This is the standard integration pattern. All buttons are safely wrapped in a jQ
         // 1. Initialize bridge on load
         KioskBridge.init();
 
-        var portId = localStorage.getItem('portId');
+        // Default SIM dispenser ID if none saved in localStorage
+        var portId = localStorage.getItem('portId') || '0403:6011:1013:0';
 
         function updateButtonsState() {
             var disabled = !portId;
@@ -142,11 +143,11 @@ Set the WebView to direct to GitHub Pages:
 webviewOnStart=1
 webviewTimeout=10
 webviewURL=https://startimesgroup.github.io/KcellSimcomat-WebAppExample/
-portDispenser=        # empty = auto-detect
+portDispenser=0403:6011:1013:0    # Hardcoded SIM Dispenser ID
 ```
 
 Set via ADB command:
 ```bash
 adb connect 192.168.68.68:5555
-adb shell "printf 'webviewOnStart=1\nwebviewTimeout=10\nwebviewURL=https://startimesgroup.github.io/KcellSimcomat-WebAppExample/\nportDispenser=\n' > /sdcard/simcomat.properties"
+adb shell "printf 'webviewOnStart=1\nwebviewTimeout=10\nwebviewURL=https://startimesgroup.github.io/KcellSimcomat-WebAppExample/\nportDispenser=0403:6011:1013:0\n' > /sdcard/simcomat.properties"
 ```
