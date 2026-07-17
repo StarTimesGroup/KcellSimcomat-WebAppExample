@@ -113,9 +113,33 @@
     </style>
     <script>
         $(document).ready(function () {
+            // 1. Initialize bridge on load
             KioskBridge.init();
-            $('#btn-dispense').click(function () { KioskBridge.Dispenser().dispense(); });
-            $('#btn-read-iccid').click(function () { KioskBridge.Dispenser().readIccid(); });
+
+            // 2. Wire Dispense Action
+            $('#btn-dispense').click(function () {
+                var portId = localStorage.getItem('portId'); // null = auto-detects
+                KioskBridge.Dispenser(portId).dispense()
+                    .then(function () {
+                        console.log('Dispense successful!');
+                    })
+                    .catch(function (error) {
+                        console.error('Dispense failed:', error);
+                    });
+            });
+
+            // 3. Wire Read ICCID Action (capturing string value)
+            $('#btn-read-iccid').click(function () {
+                var portId = localStorage.getItem('portId');
+                KioskBridge.Dispenser(portId).readIccid()
+                    .then(function (iccid) {
+                        console.log('Captured ICCID:', iccid);
+                        // Proceed with billing flow using the iccid string
+                    })
+                    .catch(function (error) {
+                        console.error('ICCID Read failed:', error);
+                    });
+            });
         });
     </script>
 </body>
