@@ -35,10 +35,10 @@
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(156,163,175,.5); }
     </style>
 
-    <!-- Layer 1: Android bridge + SerialPortConnection -->
+    <!-- Kiosk Bridge (combines WebView bridge + MTK-F31 protocol) -->
     <script src="bridge.js"></script>
-    <!-- Layer 2: MTK-F31 protocol -->
-    <script src="MtkF31.js"></script>
+    <!-- UI Debug Harness -->
+    <script src="debug.js"></script>
 </head>
 
 <body class="bg-slate-100 font-sans text-slate-900 overflow-hidden flex flex-col h-screen w-screen">
@@ -112,130 +112,6 @@
         .btn-action:disabled { opacity: .4; pointer-events: none; }
     </style>
 
-    <script>
-    // ── Layer 3: App glue ──────────────────────────────────────────────────────
-    // Concerns: UI helpers, port management, button wiring.
-    // Protocol details live in MtkF31.js; bridge details live in bridge.js.
-
-    var controller = null;
-
-    // ── UI helpers ─────────────────────────────────────────────────────────────
-
-    function log(msg, type) {
-        var colors = { error:'text-red-600 font-semibold', warn:'text-amber-600 font-semibold',
-                       send:'text-fuchsia-600', recv:'text-emerald-700' };
-        var ms = new Date().getMilliseconds().toString().padStart(3,'0');
-        var time = new Date().toLocaleTimeString('en-US',{hour12:false}) + '.' + ms;
-        var el = document.createElement('div');
-        el.className = 'mb-1.5 break-all';
-        el.innerHTML = '<span class="text-slate-400 mr-1.5">[' + time + ']</span>'
-                     + '<span class="' + (colors[type] || 'text-indigo-600') + '">' + msg + '</span>';
-        var box = document.getElementById('console-log');
-        box.appendChild(el);
-        box.scrollTop = box.scrollHeight;
-    }
-
-    function setStatus(title, sub) {
-        document.getElementById('status-title').textContent = 'Status: ' + title;
-        document.getElementById('status-sub').textContent = sub || '';
-        var el = document.getElementById('status-title');
-        var t = title.toLowerCase();
-        el.className = 'text-lg font-bold ' + (t.includes('error')||t.includes('fail') ? 'text-red-600'
-                                              : t.includes('success') ? 'text-emerald-600'
-                                              : 'text-brand');
-    }
-
-    function lockUI()   { $('#btn-dispense, #btn-read-iccid, #select-port').prop('disabled', true); }
-    function unlockUI() { $('#btn-dispense, #btn-read-iccid, #select-port').prop('disabled', false); }
-    function resetUI()  { unlockUI(); setStatus('Idle', 'Select a port and tap an action.'); }
-
-    // ── Port management ────────────────────────────────────────────────────────
-
-    function loadPorts() {
-        if (!KioskBridge.isAvailable()) return;
-        var ports = KioskBridge.listPorts();
-        var stored = localStorage.getItem('selected_serial_port');
-        $('#select-port').html('<option value="auto">Auto-Detect Dispenser</option>');
-        ports.forEach(function (p) { $('#select-port').append($('<option>').val(p.id).text(p.name)); });
-        if (stored && $('#select-port option[value="' + stored + '"]').length) {
-            $('#select-port').val(stored);
-        }
-        log('Found ' + ports.length + ' port(s).');
-    }
-
-    /** Lazily open + cache a controller for the selected port */
-    function getController() {
-        if (controller) return Promise.resolve(controller);
-
-        var portId = $('#select-port').val();
-        if (portId === 'auto') {
-            var ports = KioskBridge.listPorts();
-            return MtkF31Controller.autoDetectPort(ports, KioskBridge.openPort, log)
-                .then(function (id) {
-                    $('#select-port').val(id);
-                    localStorage.setItem('selected_serial_port', id);
-                    return buildController(id);
-                });
-        }
-        return Promise.resolve(buildController(portId));
-    }
-
-    function buildController(portId) {
-        var conn = KioskBridge.openPort(portId, { onLog: log });
-        controller = MtkF31Controller(conn, { onLog: log, onStatus: setStatus });
-        return controller;
-    }
-
-    // ── Boot ───────────────────────────────────────────────────────────────────
-
-    $(document).ready(function () {
-        // Bridge status badge
-        var avail = KioskBridge.isAvailable();
-        $('#badge-dot').css({ background: avail ? '#10b981' : '#94a3b8',
-                              boxShadow:  avail ? '0 0 6px rgba(16,185,129,.6)' : 'none' });
-        $('#badge-label').text(avail ? 'JSAPI' : 'Preview');
-
-        if (avail) {
-            KioskBridge.signalReady();
-            log('KIOSK.inited() sent.');
-            loadPorts();
-        } else {
-            log('Bridge not detected — running in preview mode.', 'warn');
-        }
-
-        // Refresh ports on dropdown interaction
-        $('#select-port').on('mousedown focus', loadPorts);
-
-        // Port change → invalidate cached controller
-        $('#select-port').change(function () {
-            controller = null;
-            localStorage.setItem('selected_serial_port', $(this).val());
-        });
-
-        // Clear logs
-        $('#console-clear').click(function () { $('#console-log').empty(); log('Logs cleared.'); });
-
-        // ── Button wiring ── (each handler is now a one-liner)
-
-        $('#btn-dispense').click(function () {
-            if (!KioskBridge.isAvailable()) { alert('KIOSK API not available.'); return; }
-            lockUI();
-            getController()
-                .then(function (c) { return c.dispense(); })
-                .then(function ()   { log('Dispense complete.'); setTimeout(resetUI, 2000); })
-                .catch(function (e) { log('Dispense failed: ' + e.message, 'error'); setStatus('Failed', e.message); setTimeout(resetUI, 3000); });
-        });
-
-        $('#btn-read-iccid').click(function () {
-            if (!KioskBridge.isAvailable()) { alert('KIOSK API not available.'); return; }
-            lockUI();
-            getController()
-                .then(function (c) { return c.readIccid(); })
-                .then(function (id) { log('ICCID: ' + id); setTimeout(resetUI, 3000); })
-                .catch(function (e) { log('Read failed: ' + e.message, 'error'); setStatus('Read Failed', e.message); setTimeout(resetUI, 3000); });
-        });
-    });
-    </script>
 
 </body>
 </html>
