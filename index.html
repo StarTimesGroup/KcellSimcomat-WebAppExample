@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIMCOMAT Kiosk Portal</title>
+    <!-- Google Fonts Outfit & JetBrains Mono -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- jQuery CDN -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+    <!-- Tailwind CSS v4 Browser CDN (modern browsers/WebViews) -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style type="text/tailwindcss">
+        @theme {
+            --font-sans: 'Outfit', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+            --color-brand: #c5003e;
+            --color-brand-hover: #a80032;
+            --color-brand-light: #ff4d79;
+        }
+    </style>
+
+    <!-- Fallback: pre-compiled Tailwind v2 + brand utilities for older WebViews -->
+    <noscript><link href="tailwind.min.css" rel="stylesheet"></noscript>
+    <script>
+        // If @tailwindcss/browser@4 failed to load (old WebView), inject v2 fallback
+        if (!window.__tw) {
+            var link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = 'tailwind.min.css';
+            document.head.appendChild(link);
+        }
+    </script>
+    <style>
+        /* Brand color fallback utilities (for Tailwind v2 which doesn't have @theme) */
+        .text-brand { color: #c5003e; }
+        .hover\:text-brand:hover { color: #a80032; }
+        .bg-brand { background-color: #c5003e; }
+        .focus\:ring-brand:focus { --tw-ring-color: #c5003e; }
+        .focus\:border-brand:focus { border-color: #c5003e; }
+        .from-brand { --tw-gradient-from: #c5003e; --tw-gradient-to: rgb(197 0 62 / 0); --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to); }
+        .to-brand-hover { --tw-gradient-to: #a80032; }
+        .hover\:from-brand-light:hover { --tw-gradient-from: #ff4d79; --tw-gradient-to: rgb(255 77 121 / 0); --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to); }
+        .hover\:to-brand:hover { --tw-gradient-to: #c5003e; }
+    </style>
+
+    <!-- Synchronous KIOSK bridge wrapper -->
+    <script>
+        if (window.AndroidBridge && !window.KIOSK) {
+            var subscribers = {};
+            window.KIOSK = {
+                inited: function() {
+                    AndroidBridge.inited();
+                },
+                serial: function(id) {
+                    return {
+                        publish: function(data) {
+                            var payload = "";
+                            if (data && typeof data === 'object') {
+                                payload = data.payload || "";
+                            } else if (typeof data === 'string') {
+                                payload = data;
+                            }
+                            AndroidBridge.publish(id, payload);
+                        },
+                        subscribe: function(callback) {
+                            subscribers[id] = callback;
+                            AndroidBridge.subscribe(id);
+                        }
+                    };
+                }
+            };
+            window.KIOSK.serial.list = function() {
+                var listJson = AndroidBridge.list();
+                return JSON.parse(listJson);
+            };
+            window.__KIOSK_dispatch = function(id, payload) {
+                if (subscribers[id]) {
+                    try {
+                        subscribers[id]({ id: id, payload: payload });
+                    } catch (e) {
+                        console.error("Error in KIOSK callback: " + e);
+                    }
+                }
+            };
+            console.log("KIOSK synchronous bridge defined successfully.");
+        }
+    </script>
+
+    <!-- Generic Serial Port Connection Class -->
+    <script>
+        class SerialPortConnection {
+            constructor(portId, options = {}) {
+                this.portId = portId;
+                this.onLog = options.onLog || console.log;
+                this.onIncoming = options.onIncoming || (x => x);
+                this.buffer = "";
+                this.listeners = [];
+                this.active = false;
+                
+                this.subscribe();
+            }
+
+            subscribe() {
+                if (window.KIOSK && !this.active) {
+                    this.active = true;
+                    this.subscription = window.KIOSK.serial(this.portId).subscribe((event) => {
+                        if (event && event.payload) {
+                            let incoming = event.payload.replace(/\s+/g, "").toUpperCase();
+                            incoming = this.onIncoming(incoming);
+                            if (!incoming) return;
+                            this.buffer += incoming;
+                            
+                            this.listeners.forEach(listener => {
+                                try {
+                                    listener(incoming);
+                                } catch (err) {
+                                    console.error("Error in onData listener:", err);
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+
+            publish(hex) {
+                if (window.KIOSK) {
+                    window.KIOSK.serial(this.portId).publish(hex);
+                }
+            }
+
+            onData(callback) {
+                this.listeners.push(callback);
+                return () => {
+                    this.listeners = this.listeners.filter(cb => cb !== callback);
+                };
+            }
+
+            clearBuffer() {
+                this.buffer = "";
+            }
+
+            readPacket(timeoutMs, validator) {
+                let resolve, reject;
+                const promise = new Promise((res, rej) => {
+                    resolve = res;
+                    reject = rej;
+                });
+
+                const timeout = setTimeout(() => {
+                    cleanup();
+                    reject(new Error("Timeout waiting for response from serial device"));
+                }, timeoutMs);
+
+                const listener = () => {
+                    try {
+                        const res = validator(this.buffer);
+                        if (res.consumeBytes > 0) {
+                            this.buffer = this.buffer.substring(res.consumeBytes);
+                        }
+                        if (res.complete) {
+                            cleanup();
+                            resolve(res.packet);
+                        }
+                    } catch (err) {
+                        cleanup();
+                        reject(err);
+                    }
+                };
+
+                const cleanup = () => {
+                    clearTimeout(timeout);
+                    this.listeners = this.listeners.filter(cb => cb !== listener);
+                };
+
+                this.listeners.push(listener);
+                listener();
+
+                return promise;
+            }
+
+            close() {
+                this.listeners = [];
+                this.active = false;
+                if (window.KIOSK) {
+                    try {
+                        window.KIOSK.serial(this.portId).subscribe(() => {});
+                    } catch (e) {
+                        console.error("Error unsubscribing serial port:", e);
+                    }
+                }
+            }
+        }
+        window.SerialPortConnection = SerialPortConnection;
+    </script>
+
+    <!-- Abstract MTK Protocol and Controller Library -->
+    <script src="MtkF31.js"></script>
+
+    <style>
+        * {
+            user-select: none;
+        }
+        body {
+            overflow: hidden;
+        }
+
+        /* Custom scrollbar styling for console log area */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(156, 163, 175, 0.3);
+            border-radius: 99px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(156, 163, 175, 0.5);
+        }
+    </style>
+</head>
+<body class="bg-slate-100 font-sans text-slate-900 overflow-hidden flex flex-col h-screen w-screen">
+    <header class="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center shadow-[0_2px_8px_rgba(15,23,42,0.04)] shrink-0">
+        <div class="flex flex-col gap-0.5">
+            <!-- External SVG Logo reference -->
+            <img src="logo.svg" style="height: 26px; display: block;" alt="activ logo">
+            <p class="text-[10px] text-slate-500 font-semibold">Web Portal v1.0.3</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <!-- Port dropdown selection -->
+            <div class="relative flex items-center">
+                <select id="select-port" class="bg-slate-100 hover:bg-slate-200/70 border border-slate-200 text-slate-800 text-xs font-semibold rounded-lg focus:ring-2 focus:ring-brand focus:border-brand pl-3 pr-8 py-2 appearance-none cursor-pointer transition-colors outline-none">
+                    <option value="auto">Auto-Detect Dispenser</option>
+                </select>
+                <!-- Custom drop chevron -->
+                <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-slate-500">
+                    <svg class="fill-current" style="height: 16px; width: 16px;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                        <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
+                    </svg>
+                </div>
+            </div>
+
+
+            <!-- Status Badge -->
+            <div class="flex items-center gap-1.5 bg-slate-100 border border-slate-200 text-[11px] text-slate-600 px-3 py-1.5 rounded-full font-semibold">
+                <span class="rounded-full bg-emerald-500" style="width: 6px; height: 6px; display: inline-block; box-shadow: 0 0 6px rgba(16,185,129,0.6);"></span>
+                <span>JSAPI</span>
+            </div>
+
+            <!-- Refresh Page Button -->
+            <button id="btn-refresh-page" onclick="window.location.reload()" class="flex items-center justify-center bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 p-2 rounded-full cursor-pointer transition-colors outline-none" title="Refresh Page">
+                <svg class="fill-current" style="height: 12px; width: 12px;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <div class="flex-1 flex flex-col p-5 gap-5 h-[calc(100vh-70px)] overflow-hidden">
+        <!-- Control Panel Card -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] flex flex-col gap-4 shrink-0">
+            <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Control Panel</h2>
+
+            <div class="bg-slate-50 border border-slate-200 rounded-xl p-5 text-center transition-all duration-300">
+                <div class="text-lg font-bold text-brand transition-all duration-300" id="status-val">Status: Idle</div>
+                <div class="text-[13px] text-slate-500 mt-1 font-medium" id="status-sub-val">Select a port and click Dispense SIM to start.</div>
+            </div>
+
+            <button class="w-full bg-gradient-to-r from-brand to-brand-hover hover:from-brand-light hover:to-brand text-white font-semibold py-3.5 px-6 rounded-xl shadow-md hover:shadow-lg active:scale-[0.99] transition-all duration-200 outline-none disabled:opacity-40 disabled:pointer-events-none" id="btn-dispense">
+                Dispense SIM
+            </button>
+
+            <button class="w-full bg-gradient-to-r from-indigo-600 to-indigo-800 hover:from-indigo-500 hover:to-indigo-600 text-white font-semibold py-3.5 px-6 rounded-xl shadow-md hover:shadow-lg active:scale-[0.99] transition-all duration-200 outline-none disabled:opacity-40 disabled:pointer-events-none" id="btn-read-iccid">
+                Read ICCID
+            </button>
+
+            <a href="https://sim.fabtech.uz" class="w-full bg-gradient-to-r from-brand to-brand-hover hover:from-brand-light hover:to-brand text-white font-semibold py-3.5 px-6 rounded-xl shadow-md hover:shadow-lg active:scale-[0.99] transition-all duration-200 outline-none disabled:opacity-40 disabled:pointer-events-none" id="btn-go">
+                sim.fabtech.uz
+            </a>
+
+            <a href="https://activ.kz/new-number" class="w-full bg-gradient-to-r from-brand to-brand-hover hover:from-brand-light hover:to-brand text-white font-semibold py-3.5 px-6 rounded-xl shadow-md hover:shadow-lg active:scale-[0.99] transition-all duration-200 outline-none disabled:opacity-40 disabled:pointer-events-none" id="btn-go">
+                https://activ.kz/new-number
+            </a>
+        </div>
+
+        <!-- Console Logger Card -->
+        <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] flex flex-col overflow-hidden flex-1 min-h-[160px]">
+            <div class="flex justify-between items-center mb-3 shrink-0">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Device Logs</h2>
+                <span class="text-xs text-slate-400 hover:text-red-600 cursor-pointer transition-colors font-medium" id="console-clear">Clear Logs</span>
+            </div>
+            <div class="flex-1 bg-slate-50 border border-slate-200 rounded-xl p-4 font-mono text-[12px] overflow-y-auto custom-scrollbar text-slate-800" id="console-log">
+                <div class="mb-1.5 break-all"><span class="text-slate-400 mr-1.5">[System]</span>WebView loaded. Ready.</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global list of discovered ports
+        let serialPorts = [];
+        let currentConnection = null;
+        let currentController = null;
+
+        // Log Console helper
+        function log(msg, type = "info") {
+            const time = new Date().toLocaleTimeString('en-US', { hour12: false }) + "." + String(new Date().getMilliseconds()).padStart(3, '0');
+            const entry = document.createElement("div");
+            entry.className = "mb-1.5 break-all";
+            
+            let typeClass = "";
+            if (type === "error") typeClass = "text-red-600 font-semibold";
+            else if (type === "warn") typeClass = "text-amber-600 font-semibold";
+            else if (type === "send") typeClass = "text-fuchsia-600";
+            else if (type === "recv") typeClass = "text-emerald-700";
+            else typeClass = "text-indigo-600";
+
+            entry.innerHTML = `<span class="text-slate-400 mr-1.5">[${time}]</span><span class="${typeClass}">${msg}</span>`;
+            $("#console-log").append(entry);
+            
+            // Auto scroll console
+            const el = document.getElementById("console-log");
+            if (el) el.scrollTop = el.scrollHeight;
+        }
+
+        // Helper to initialize dispenser connection
+        function initDispenser(portId) {
+            if (currentConnection) {
+                log(`Closing previous connection on port: ${currentConnection.portId}`);
+                currentConnection.close();
+                currentConnection = null;
+                currentController = null;
+            }
+            
+            log(`Initializing new connection on port: ${portId}`);
+            currentConnection = new SerialPortConnection(portId, {
+                onLog: log,
+                onIncoming: function(incoming) {
+                    if (incoming === "06") {
+                        log("ACK (0x06) received and stripped.", "info");
+                        return "";
+                    }
+                    return incoming;
+                }
+            });
+
+            currentController = MtkF31Controller(currentConnection, {
+                onLog: log,
+                onStatus: updateStatus
+            });
+            return Promise.resolve(currentController);
+        }
+
+        // Helper to ensure dispenser is fully initialized
+        function ensureDispenserInited() {
+            if (currentController && currentConnection && currentConnection.active) {
+                return Promise.resolve(currentController);
+            }
+
+            let targetPort = $("#select-port").val();
+            if (targetPort === "auto") {
+                return MtkF31Controller.autoDetectPort(serialPorts, log)
+                    .then(function(detectedPort) {
+                        if (detectedPort) {
+                            $("#select-port").val(detectedPort);
+                            localStorage.setItem("selected_serial_port", detectedPort);
+                            return initDispenser(detectedPort);
+                        }
+                        throw new Error("No dispenser detected");
+                    })
+                    .then(function() {
+                        return currentController;
+                    });
+            }
+
+            return initDispenser(targetPort).then(function() {
+                return currentController;
+            });
+        }
+
+        function goToFabtech() {
+            console.log("Go to fabtech");
+            window.location.href = "https://sim.fabtech.uz";
+        }
+
+        // Fetch ports list from native bridge
+        function loadPorts() {
+            if (!window.KIOSK) return;
+            try {
+                const ports = window.KIOSK.serial.list();
+                serialPorts = ports || [];
+                log(`Fetched ${serialPorts.length} active serial port(s).`);
+
+                const storedSelection = localStorage.getItem("selected_serial_port");
+
+                // Build options list
+                $("#select-port").html('<option value="auto">Auto-Detect Dispenser</option>');
+                serialPorts.forEach(port => {
+                    const opt = $("<option></option>").val(port.id).text(port.name);
+                    $("#select-port").append(opt);
+                });
+
+                if (storedSelection && $("#select-port option[value='" + storedSelection + "']").length > 0) {
+                    $("#select-port").val(storedSelection);
+                    log(`Restored port selection from localStorage: ${storedSelection}`);
+                }
+            } catch (e) {
+                log("Failed to list serial ports: " + e.message, "error");
+            }
+        }
+
+        // Initialize jQuery behaviors
+        $(document).ready(function() {
+            log("KIOSK portal UI initialized.");
+            
+            if (window.KIOSK) {
+                try {
+                    window.KIOSK.inited();
+                    log("KIOSK.inited() callback sent successfully.");
+                    loadPorts();
+                    
+                    // Attempt early setup of dispenser connection
+                    ensureDispenserInited().catch(e => {
+                        log(`Initial dispenser setup standby: ${e.message}`, "info");
+                    });
+                } catch (e) {
+                    log("Error executing KIOSK.inited(): " + e.message, "error");
+                }
+            } else {
+                log("KIOSK API not detected. Standing by in web preview mode.", "warn");
+            }
+
+            // Click dropdown interaction triggers refresh ports
+            $("#select-port").on("mousedown focus", function() {
+                loadPorts();
+            });
+
+            // Listen to port changes to save selection and update active connection
+            $("#select-port").change(function() {
+                const selected = $(this).val();
+                localStorage.setItem("selected_serial_port", selected);
+                log(`Saved port selection to localStorage: ${selected}`);
+                
+                if (selected === "auto") {
+                    if (currentConnection) {
+                        log("Auto-Detect selected. Disconnecting active port.");
+                        currentConnection.close();
+                        currentConnection = null;
+                        currentController = null;
+                    }
+                } else {
+                    initDispenser(selected)
+                        .then(function() {
+                            log(`Successfully connected to port: ${selected}`);
+                        })
+                        .catch(function(e) {
+                            log(`Error connecting to selected port: ${e.message}`, "error");
+                        });
+                }
+            });
+
+            // Click Handlers
+            $("#console-clear").click(function() {
+                $("#console-log").empty();
+                log("Logs cleared.");
+            });
+
+
+
+            $("#btn-dispense").click(function() {
+                if (!window.KIOSK) {
+                    alert("KIOSK API not available.");
+                    return;
+                }
+
+                $("#btn-dispense, #btn-read-iccid, #select-port").prop("disabled", true);
+                
+                ensureDispenserInited()
+                    .then(function(controller) {
+                        return controller.dispense();
+                    })
+                    .then(function() {
+                        log("Dispense sequence execution completed successfully!");
+                        // Reset UI on success
+                        setTimeout(resetUI, 2000);
+                    })
+                    .catch(function(e) {
+                        log(`Dispense process failed: ${e.message}`, "error");
+                        updateStatus("Dispense Failed", e.message);
+                        setTimeout(resetUI, 3000);
+                    });
+            });
+
+            $("#btn-read-iccid").click(function() {
+                if (!window.KIOSK) {
+                    alert("KIOSK API not available.");
+                    return;
+                }
+
+                $("#btn-dispense, #btn-read-iccid, #select-port").prop("disabled", true);
+                
+                ensureDispenserInited()
+                    .then(function(controller) {
+                        return controller.readIccid();
+                    })
+                    .then(function(iccid) {
+                        log(`ICCID Read Success: ${iccid}`);
+                        setTimeout(resetUI, 3000);
+                    })
+                    .catch(function(e) {
+                        log(`ICCID Read failed: ${e.message}`, "error");
+                        updateStatus("Read Failed", e.message);
+                        setTimeout(resetUI, 3000);
+                    });
+            });
+        });
+
+        function updateStatus(title, subtitle) {
+            $("#status-val").text("Status: " + title);
+            $("#status-sub-val").text(subtitle);
+            
+            const titleLower = title.toLowerCase();
+            const textValEl = $("#status-val");
+            
+            if (titleLower.includes("error") || titleLower.includes("failed")) {
+                textValEl.removeClass("text-brand text-emerald-600").addClass("text-red-600");
+            } else if (titleLower.includes("success")) {
+                textValEl.removeClass("text-brand text-red-600").addClass("text-emerald-600");
+            } else {
+                textValEl.removeClass("text-red-600 text-emerald-600").addClass("text-brand");
+            }
+        }
+
+        function resetUI() {
+            $("#btn-dispense, #btn-read-iccid, #select-port").prop("disabled", false);
+            updateStatus("Idle", "Select a port and click Dispense SIM to start.");
+        }
+    </script>
+</body>
+</html>
