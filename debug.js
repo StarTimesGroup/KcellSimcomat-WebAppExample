@@ -80,7 +80,7 @@
 
     function loadPorts() {
       var ports = KioskBridge.listPorts();
-      var stored = localStorage.getItem('portId') || '1013:611';
+      var stored = localStorage.getItem('portId') || '0403:6011:1013:0';
       $('#select-port').html('<option value="auto">Auto-Detect Dispenser</option>');
       ports.forEach(function (p) {
         $('#select-port').append($('<option>').val(p.id).text(p.name));
@@ -116,7 +116,7 @@
   global.debug = {
     portList: function (callback) {
       _portListeners.push(callback);
-      var stored = localStorage.getItem('portId') || '1013:611';
+      var stored = localStorage.getItem('portId') || '0403:6011:1013:0';
       if (stored) {
         callback(stored);
       } else {
