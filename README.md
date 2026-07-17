@@ -12,7 +12,8 @@ In a regular browser, the UI loads in preview mode — no hardware required.
 
 ```
 app_web/
-├── bridge.js        # Core Bridge (Android ↔ JS boot + MTK-F31 protocol)
+├── kiosk.js         # Core Bridge (Android ↔ JS boot + pub/sub streams)
+├── mtk.js           # MTK-F31 Protocol Driver (Injects Dispenser to Bridge)
 ├── debug.js         # Debug Harness (developer logs, status indicators, dropdown UI)
 ├── index.html       # Client Portal (HTML template + minimal glue script)
 ├── logo.svg
@@ -21,7 +22,8 @@ app_web/
 
 ### Script Separation of Concerns
 
-* **`bridge.js`**: Completely self-contained. Owns WebView bootstrapping, serial port listener subscriptions, timeout handler queues, and the complete MTK-F31 smart card reader command pipeline. Has zero awareness of DOM selectors or jQuery.
+* **`kiosk.js`**: Completely self-contained core bridge. Owns WebView bootstrapping and serial port listener subscriptions. Has zero awareness of DOM selectors or jQuery.
+* **`mtk.js`**: Contains the MTK-F31 protocol implementation and hooks into `KioskBridge.Dispenser`.
 * **`debug.js`**: Connects developer harness event listeners to log serial communications, update status headers, construct port lists, and manage the connectivity badge.
 * **`index.html`**: Contains the client-facing UI design and the basic scripts to glue the buttons to the bridge commands.
 
@@ -45,7 +47,8 @@ The bridge falls back gracefully when `AndroidBridge` is absent — the UI runs 
 This is the standard integration pattern. All buttons are safely wrapped in a jQuery ready check and remain disabled if no active port is selected:
 
 ```html
-<script src="bridge.js"></script>
+<script src="kiosk.js"></script>
+<script src="mtk.js"></script>
 <script>
     $(document).ready(function () {
         // 1. Initialize bridge on load
@@ -96,7 +99,7 @@ This is the standard integration pattern. All buttons are safely wrapped in a jQ
 
 ---
 
-## KioskBridge API (`bridge.js`)
+## KioskBridge API (`kiosk.js` & `mtk.js`)
 
 ```js
 // Boot and availability
