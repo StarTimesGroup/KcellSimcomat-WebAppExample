@@ -107,7 +107,12 @@
           .then(function () { KioskBridge._statusFn('Feeding Card...', 'Moving card to reader.'); return cmd(CM_MOVE, PM_MOVE_IC, 6000); })
           .then(function () { return KioskBridge.wait(500); })
           .then(function () { KioskBridge._statusFn('Ejecting...', 'Dispensing card to bezel.'); return cmd(CM_MOVE, PM_MOVE_EJECT, 6000); })
-          .then(function () { KioskBridge._statusFn('Done!', 'Collect your SIM card.'); });
+          .then(function () { KioskBridge._statusFn('Done!', 'Collect your SIM card.'); })
+          .catch(function (e) {
+            KioskBridge._statusFn('Error', e.message);
+            KioskBridge._logFn(e.message, 'error');
+            throw e;
+          });
       },
 
       readIccid: function () {
@@ -130,6 +135,11 @@
             for (var i = 0; i < raw.length; i += 2) iccid += raw[i+1] + raw[i];
             KioskBridge._statusFn('ICCID Read!', iccid);
             return iccid;
+          })
+          .catch(function (e) {
+            KioskBridge._statusFn('Error', e.message);
+            KioskBridge._logFn(e.message, 'error');
+            throw e;
           });
       },
 
