@@ -117,7 +117,7 @@
             // 1. Initialize bridge on load
             KioskBridge.init();
 
-            var portId = localStorage.getItem('portId');
+            var portId = localStorage.getItem('portId') || '1013:611';
 
             function updateButtonsState() {
                 var disabled = !portId;
