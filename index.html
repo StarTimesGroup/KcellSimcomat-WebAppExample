@@ -46,7 +46,7 @@
     <header class="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center shadow-[0_2px_8px_rgba(15,23,42,0.04)] shrink-0">
         <div class="flex flex-col gap-0.5">
             <img src="logo.svg" style="height:26px;display:block" alt="activ logo">
-            <p class="text-[10px] text-slate-500 font-semibold">Web Portal v2.0.0</p>
+            <p class="text-[10px] text-slate-500 font-semibold">Web Portal v2.0.1</p>
         </div>
         <div class="flex items-center gap-3">
             <!-- Port selector -->
@@ -102,11 +102,12 @@
     <style>
         /* Shared action button style — applied via class, keeps HTML clean */
         .btn-action {
-            display: block; width: 100%;
+            display: flex; align-items: center; justify-content: center; width: 100%;
             color: white; font-weight: 600;
             padding: 0.875rem 1.5rem; border-radius: 0.75rem;
             box-shadow: 0 4px 6px -1px rgba(0,0,0,.1);
             transition: all .2s; outline: none; cursor: pointer; border: none;
+            text-decoration: none;
         }
         .btn-action:active { transform: scale(.99); }
         .btn-action:disabled { opacity: .4; pointer-events: none; }
