@@ -116,9 +116,30 @@
             // 1. Initialize bridge on load
             KioskBridge.init();
 
-            // 2. Wire Dispense Action
+            var portId = localStorage.getItem('portId');
+
+            function updateButtonsState() {
+                var disabled = !portId;
+                $('#btn-dispense, #btn-read-iccid').prop('disabled', disabled);
+            }
+
+            // 2. Listen to port selection and update state
+            if (window.debug && window.debug.portList) {
+                window.debug.portList(function (selectedPortId) {
+                    portId = selectedPortId;
+                    if (portId) {
+                        localStorage.setItem('portId', portId);
+                    } else {
+                        localStorage.removeItem('portId');
+                    }
+                    updateButtonsState();
+                });
+            }
+
+            updateButtonsState();
+
+            // 3. Wire Dispense Action
             $('#btn-dispense').click(function () {
-                var portId = localStorage.getItem('portId'); // null = auto-detects
                 KioskBridge.Dispenser(portId).dispense()
                     .then(function () {
                         console.log('Dispense successful!');
@@ -128,9 +149,8 @@
                     });
             });
 
-            // 3. Wire Read ICCID Action (capturing string value)
+            // 4. Wire Read ICCID Action (capturing string value)
             $('#btn-read-iccid').click(function () {
-                var portId = localStorage.getItem('portId');
                 KioskBridge.Dispenser(portId).readIccid()
                     .then(function (iccid) {
                         console.log('Captured ICCID:', iccid);
