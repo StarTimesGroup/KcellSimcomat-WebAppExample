@@ -1,378 +1,212 @@
-/** version 1
- * MtkF31Controller class encapsulating linear serial workflows via async-await.
- * Built using an IIFE (Immediately Invoked Function Expression) closure to prevent global scope pollution
- * and avoid namespace collisions.
+/**
+ * MtkF31.js — MTK-F31 SIM Card Dispenser Protocol Library  v2
+ *
+ * Pure protocol layer — no UI, no Android, no jQuery.
+ * Depends only on a `connection` object that implements:
+ *   .clearBuffer()
+ *   .publish(hexString)
+ *   .readPacket(timeoutMs, validatorFn) → Promise<hexString>
+ *
+ * autoDetectPort() accepts an injected `openPort` function so this file
+ * has zero coupling to window.* globals.
  */
 const MtkF31Controller = (function () {
-  // String.prototype.padStart polyfill for older WebViews (Chromium < 57)
+
+  // padStart polyfill for Chromium < 57 WebViews
   if (!String.prototype.padStart) {
-    String.prototype.padStart = function (targetLength, padString) {
-      var str = String(this);
-      targetLength = targetLength >> 0;
-      padString = String(padString !== undefined ? padString : ' ');
-      if (str.length >= targetLength) {
-        return str;
-      }
-      targetLength = targetLength - str.length;
-      while (padString.length < targetLength) {
-        padString += padString;
-      }
-      return padString.slice(0, targetLength) + str;
+    String.prototype.padStart = function (len, pad) {
+      var s = String(this);
+      pad = String(pad !== undefined ? pad : ' ');
+      while (pad.length < len - s.length) pad += pad;
+      return pad.slice(0, Math.max(0, len - s.length)) + s;
     };
   }
 
-  // Private Constants matching native MtkF31Controller
-  const STX = "F2";
-  const ETX = "03";
-  const CMT_CMD = "43"; // 'C'
-  const CMT_RESP_POS = "50"; // 'P'
-  const CMT_RESP_NEG = "4E"; // 'N'
+  // ── Protocol constants ──────────────────────────────────────────────────────
+  var STX          = 'F2';
+  var ETX          = '03';
+  var CMT_CMD      = '43'; // 'C'
+  var CMT_RESP_POS = '50'; // 'P'
+  var CMT_RESP_NEG = '4E'; // 'N'
 
-  const CM_RESET = "30";
-  const PM_RESET = "31";
+  var CM_RESET  = '30'; var PM_RESET     = '31';
+  var CM_STATUS = '31'; var PM_STATUS    = '30';
+  var CM_MOVE   = '32'; var PM_MOVE_IC   = '31';
+                        var PM_MOVE_EJECT= '30';
 
-  const CM_STATUS = "31";
-  const PM_STATUS = "30";
+  // ── Helpers ─────────────────────────────────────────────────────────────────
 
-  const CM_MOVE = "32"; // '2'
-  const PM_MOVE_EJECT = "30";
-  const PM_MOVE_IC = "31";
-
-  // Private Helper: Build MTK Checksum (BCC) packet
-  function buildPacket(addr, cm, pm, dataHex = "") {
-    const textLen = 3 + (dataHex.length / 2);
-    const lenh = ((textLen >> 8) & 0xFF).toString(16).padStart(2, '0');
-    const lenl = (textLen & 0xFF).toString(16).padStart(2, '0');
-    const addrHex = addr.toString(16).padStart(2, '0');
-
-    let packet = STX + addrHex + lenh + lenl + CMT_CMD + cm + pm + dataHex + ETX;
-
-    let bcc = 0;
-    for (let i = 0; i < packet.length; i += 2) {
-      bcc ^= parseInt(packet.substr(i, 2), 16);
-    }
-    packet += bcc.toString(16).padStart(2, '0');
-    return packet.toUpperCase();
+  /** Build a framed, BCC-checked command packet */
+  function buildPacket(addr, cm, pm, dataHex) {
+    dataHex = dataHex || '';
+    var textLen = 3 + (dataHex.length / 2);
+    var lenh = ((textLen >> 8) & 0xFF).toString(16).padStart(2, '0');
+    var lenl = (textLen & 0xFF).toString(16).padStart(2, '0');
+    var addrHex = addr.toString(16).padStart(2, '0');
+    var packet = STX + addrHex + lenh + lenl + CMT_CMD + cm + pm + dataHex + ETX;
+    var bcc = 0;
+    for (var i = 0; i < packet.length; i += 2) bcc ^= parseInt(packet.substr(i, 2), 16);
+    return (packet + bcc.toString(16).padStart(2, '0')).toUpperCase();
   }
 
-  // Private Helper: Parse and validate incoming packet
+  /** Parse and validate a raw response hex string */
   function parsePacket(hex) {
-    if (hex.startsWith("06")) {
-      hex = hex.substring(2);
-    }
-    if (!hex.startsWith(STX)) {
-      return { success: false, error: "STX missing" };
-    }
-    if (hex.length < 14) {
-      return { success: false, error: "Packet too short" };
-    }
+    if (hex.startsWith('06')) hex = hex.substring(2);
+    if (!hex.startsWith(STX)) return { success: false, errorMsg: 'STX missing' };
+    if (hex.length < 14)      return { success: false, errorMsg: 'Packet too short' };
 
-    const lenh = parseInt(hex.substr(4, 2), 16);
-    const lenl = parseInt(hex.substr(6, 2), 16);
-    const textLen = (lenh << 8) | lenl;
-    const expectedLen = 1 + 3 + textLen + 2;
+    var lenh = parseInt(hex.substr(4, 2), 16);
+    var lenl = parseInt(hex.substr(6, 2), 16);
+    var textLen = (lenh << 8) | lenl;
+    var expectedLen = (1 + 3 + textLen + 2) * 2;
+    if (hex.length < expectedLen) return { success: false, errorMsg: 'Incomplete packet' };
 
-    if (hex.length < expectedLen * 2) {
-      return { success: false, error: "Incomplete packet content" };
-    }
-
-    const packet = hex.substring(0, expectedLen * 2);
-
-    let calcBcc = 0;
-    const bccRange = packet.substring(0, packet.length - 2);
-    for (let i = 0; i < bccRange.length; i += 2) {
-      calcBcc ^= parseInt(bccRange.substr(i, 2), 16);
-    }
-    const expectedBcc = parseInt(packet.substr(packet.length - 2, 2), 16);
-
+    var packet = hex.substring(0, expectedLen);
+    var bccRange = packet.substring(0, packet.length - 2);
+    var calcBcc = 0;
+    for (var j = 0; j < bccRange.length; j += 2) calcBcc ^= parseInt(bccRange.substr(j, 2), 16);
+    var expectedBcc = parseInt(packet.substr(packet.length - 2, 2), 16);
     if (calcBcc !== expectedBcc) {
-      return {
-        success: false,
-        error: `BCC mismatch: calculated 0x${calcBcc.toString(16).toUpperCase()}, expected 0x${expectedBcc.toString(16).toUpperCase()}`
-      };
+      return { success: false, errorMsg: 'BCC mismatch: got 0x' + calcBcc.toString(16).toUpperCase() };
     }
 
-    const cmt = packet.substr(8, 2);
-    const isPositive = (cmt === CMT_RESP_POS);
-
-    let errorMsg = "Unknown Error";
-    if (!isPositive) {
-      if (cmt === CMT_RESP_NEG && packet.length >= 18) {
-        const e1 = String.fromCharCode(parseInt(packet.substr(14, 2), 16));
-        const e0 = String.fromCharCode(parseInt(packet.substr(16, 2), 16));
-        errorMsg = `Error Code: ${e1}${e0}`;
-      } else {
-        errorMsg = `Negative Response (${cmt})`;
-      }
+    var cmt = packet.substr(8, 2);
+    var isPos = (cmt === CMT_RESP_POS);
+    var errorMsg = 'Unknown Error';
+    if (!isPos && cmt === CMT_RESP_NEG && packet.length >= 18) {
+      errorMsg = 'Error Code: '
+        + String.fromCharCode(parseInt(packet.substr(14, 2), 16))
+        + String.fromCharCode(parseInt(packet.substr(16, 2), 16));
     }
-
-    return {
-      success: isPositive,
-      cmt: cmt,
-      errorMsg: errorMsg,
-      raw: packet,
-      fullLen: expectedLen * 2
-    };
+    return { success: isPos, errorMsg: errorMsg, raw: packet };
   }
 
-  // Private Helper: Pluggable packet validator for MTK protocol
-  function validateMtkPacket(buffer) {
-    if (buffer.length < 14) {
-      return { complete: false, consumeBytes: 0 };
-    }
-
-    const stxIdx = buffer.indexOf("F2");
-    if (stxIdx === -1) {
-      // No STX found, discard all currently buffered data as junk
-      return { complete: false, consumeBytes: buffer.length };
-    }
-
-    // If STX is found but not at the start, discard leading junk
-    if (stxIdx > 0) {
-      return { complete: false, consumeBytes: stxIdx };
-    }
-
-    // Parse packet length bytes (offset 4 for lenh, offset 6 for lenl)
-    const lenh = parseInt(buffer.substr(4, 2), 16);
-    const lenl = parseInt(buffer.substr(6, 2), 16);
-    if (isNaN(lenh) || isNaN(lenl)) {
-      // Invalid length representation, discard STX to find next potential STX
-      return { complete: false, consumeBytes: 2 };
-    }
-
-    const textLen = (lenh << 8) | lenl;
-    const expectedLenBytes = 1 + 3 + textLen + 2; // STX (1) + Addr(1)+Len(2) (3) + textLen + ETX(1)+BCC(1) (2)
-    const expectedLenChars = expectedLenBytes * 2;
-
-    if (buffer.length < expectedLenChars) {
-      return { complete: false, consumeBytes: 0 };
-    }
-
-    const packet = buffer.substring(0, expectedLenChars);
-    return {
-      complete: true,
-      packet: packet,
-      consumeBytes: expectedLenChars
-    };
+  /** Frame completeness checker — plugged into connection.readPacket() */
+  function validateFrame(buffer) {
+    if (buffer.length < 14) return { complete: false, consumeBytes: 0 };
+    var idx = buffer.indexOf('F2');
+    if (idx === -1) return { complete: false, consumeBytes: buffer.length };
+    if (idx > 0)   return { complete: false, consumeBytes: idx };
+    var lenh = parseInt(buffer.substr(4, 2), 16);
+    var lenl = parseInt(buffer.substr(6, 2), 16);
+    if (isNaN(lenh) || isNaN(lenl)) return { complete: false, consumeBytes: 2 };
+    var need = (1 + 3 + ((lenh << 8) | lenl) + 2) * 2;
+    if (buffer.length < need) return { complete: false, consumeBytes: 0 };
+    return { complete: true, packet: buffer.substring(0, need), consumeBytes: need };
   }
 
-  // Constructor Function
-  function MtkF31Controller(connection, options = {}) {
-    const onLog = options.onLog || console.log;
-    const onStatus = options.onStatus || console.log;
+  /** Simple promise-based delay */
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  // ── Controller factory ───────────────────────────────────────────────────────
+
+  function MtkF31Controller(connection, options) {
+    var onLog    = (options && options.onLog)    || console.log;
+    var onStatus = (options && options.onStatus) || console.log;
+
+    /** Send one command, await one framed response, send ACK, return responseHex */
+    function cmd(cm, pm, timeoutMs, dataHex) {
+      var packet = buildPacket(0, cm, pm, dataHex);
+      onLog('[TX] ' + packet.match(/.{1,2}/g).join(' '), 'send');
+      connection.clearBuffer();
+      connection.publish(packet);
+      return connection.readPacket(timeoutMs, validateFrame).then(function (hex) {
+        onLog('[RX] ' + hex.match(/.{1,2}/g).join(' '), 'recv');
+        connection.publish('06'); // ACK
+        var parsed = parsePacket(hex);
+        if (!parsed.success) throw new Error(parsed.errorMsg || 'Command failed');
+        return hex;
+      });
+    }
 
     return {
+      /**
+       * Full dispense sequence: Reset → Move to IC → Eject
+       * @returns {Promise<void>}
+       */
       dispense: function () {
-        onStatus("Initializing...", "Preparing port configuration...");
-
-        const executeCommand = function (cm, pm, timeoutMs) {
-          const packet = buildPacket(0, cm, pm);
-          onLog(`[TX] Sending command: ${packet.match(/.{1,2}/g).join(' ')}`, "send");
-          connection.clearBuffer();
-          connection.publish(packet);
-
-          return connection.readPacket(timeoutMs, validateMtkPacket)
-            .then(function (responseHex) {
-              onLog(`[RX] Received response: ${responseHex.match(/.{1,2}/g).join(' ')}`, "recv");
-
-              // Send back ACK frame
-              onLog("[TX] Sending ACK (0x06) to dispenser.", "info");
-              connection.publish("06");
-
-              const parseRes = parsePacket(responseHex);
-              if (!parseRes.success) {
-                throw new Error(parseRes.errorMsg || "Command failed");
-              }
-              return parseRes;
-            });
-        };
-
-        return new Promise(function (resolve, reject) {
-          // Wait for port config to apply
-          setTimeout(function () {
-            // 1. Reset
-            onStatus("Resetting...", "Initializing dispenser reset...");
-            executeCommand(CM_RESET, PM_RESET, 4000)
-              .then(function () {
-                return new Promise(function (r) { setTimeout(r, 500); });
-              })
-              .then(function () {
-                // 2. Feed card to IC
-                onStatus("Feeding Card...", "Moving SIM card from hopper to reader.");
-                return executeCommand(CM_MOVE, PM_MOVE_IC, 6000);
-              })
-              .then(function () {
-                return new Promise(function (r) { setTimeout(r, 500); });
-              })
-              .then(function () {
-                // 3. Eject card
-                onStatus("Ejecting Card...", "Dispensing card to customer bezel.");
-                return executeCommand(CM_MOVE, PM_MOVE_EJECT, 6000);
-              })
-              .then(function () {
-                onStatus("Dispense Successful!", "Collect your SIM card from the bezel.");
-                resolve();
-              })
-              .catch(reject);
-          }, 200);
-        });
+        onStatus('Initializing...', 'Preparing dispenser...');
+        return wait(200)
+          .then(function () { onStatus('Resetting...', 'Initializing dispenser reset...'); return cmd(CM_RESET, CM_STATUS, 4000); })
+          .then(function () { return wait(500); })
+          .then(function () { onStatus('Feeding Card...', 'Moving SIM card from hopper to reader.'); return cmd(CM_MOVE, PM_MOVE_IC, 6000); })
+          .then(function () { return wait(500); })
+          .then(function () { onStatus('Ejecting Card...', 'Dispensing card to customer bezel.'); return cmd(CM_MOVE, PM_MOVE_EJECT, 6000); })
+          .then(function () { onStatus('Dispense Successful!', 'Collect your SIM card from the bezel.'); });
       },
+
+      /**
+       * Read ICCID from the SIM chip via ISO-7816 APDUs.
+       * Card remains in reader after this call — caller decides to eject or reject.
+       * @returns {Promise<string>} 20-digit ICCID string
+       */
       readIccid: function () {
-        onStatus("Reading ICCID...", "Initializing card read...");
-
-        const executeCommand = function (cm, pm, timeoutMs, dataHex = "") {
-          const packet = buildPacket(0, cm, pm, dataHex);
-          onLog(`[TX] Sending command: ${packet.match(/.{1,2}/g).join(' ')}`, "send");
-          connection.clearBuffer();
-          connection.publish(packet);
-
-          return connection.readPacket(timeoutMs, validateMtkPacket)
-            .then(function (responseHex) {
-              onLog(`[RX] Received response: ${responseHex.match(/.{1,2}/g).join(' ')}`, "recv");
-
-              onLog("[TX] Sending ACK (0x06) to dispenser.", "info");
-              connection.publish("06");
-
-              const parseRes = parsePacket(responseHex);
-              if (!parseRes.success) {
-                throw new Error(parseRes.errorMsg || "Command failed");
-              }
-              return responseHex;
-            });
-        };
-
-        return new Promise(function (resolve, reject) {
-          setTimeout(function () {
-            // 1. Reset
-            onStatus("Resetting...", "Initializing dispenser reset...");
-            executeCommand(CM_RESET, PM_RESET, 4000)
-              .then(function () {
-                return new Promise(function (r) { setTimeout(r, 500); });
-              })
-              .then(function () {
-                // 2. Feed card to IC
-                onStatus("Feeding Card...", "Moving SIM card from hopper to reader.");
-                return executeCommand(CM_MOVE, PM_MOVE_IC, 6000);
-              })
-              .then(function () {
-                return new Promise(function (r) { setTimeout(r, 500); });
-              })
-              .then(function () {
-                // 3. Cold Reset (ATR)
-                onStatus("Reading ICCID...", "Performing cold reset on card reader...");
-                return executeCommand("51", "30", 4000, "35");
-              })
-              .then(function () {
-                return new Promise(function (r) { setTimeout(r, 200); });
-              })
-              .then(function () {
-                // 4. Select MF
-                onStatus("Reading ICCID...", "Selecting Master File (MF)...");
-                return executeCommand("51", "33", 4000, "A0A40000023F00");
-              })
-              .then(function () {
-                return new Promise(function (r) { setTimeout(r, 200); });
-              })
-              .then(function () {
-                // 5. Select ICCID EF
-                onStatus("Reading ICCID...", "Selecting ICCID file (EF)...");
-                return executeCommand("51", "33", 4000, "A0A40000022FE2");
-              })
-              .then(function () {
-                return new Promise(function (r) { setTimeout(r, 200); });
-              })
-              .then(function () {
-                // 6. Read ICCID EF
-                onStatus("Reading ICCID...", "Reading ICCID binary data...");
-                return executeCommand("51", "33", 4000, "A0B000000A");
-              })
-              .then(function (responseHex) {
-                if (responseHex.length < 40) {
-                  throw new Error("Invalid response length from reader");
-                }
-                const iccidHex = responseHex.substring(20, 40);
-                let parsedIccid = "";
-                for (let i = 0; i < iccidHex.length; i += 2) {
-                  const b = iccidHex.substr(i, 2);
-                  parsedIccid += b[1] + b[0];
-                }
-                onStatus("Read Successful!", "ICCID: " + parsedIccid);
-                resolve(parsedIccid);
-              })
-              .catch(reject);
-          }, 200);
-        });
+        onStatus('Reading ICCID...', 'Initializing card read...');
+        return wait(200)
+          .then(function () { onStatus('Resetting...', 'Initializing dispenser reset...'); return cmd(CM_RESET, PM_RESET, 4000); })
+          .then(function () { return wait(500); })
+          .then(function () { onStatus('Feeding Card...', 'Moving SIM to reader.'); return cmd(CM_MOVE, PM_MOVE_IC, 6000); })
+          .then(function () { return wait(500); })
+          .then(function () { onStatus('Reading ICCID...', 'Cold reset (ATR)...'); return cmd('51', '30', 4000, '35'); })
+          .then(function () { return wait(200); })
+          .then(function () { onStatus('Reading ICCID...', 'Select MF...'); return cmd('51', '33', 4000, 'A0A40000023F00'); })
+          .then(function () { return wait(200); })
+          .then(function () { onStatus('Reading ICCID...', 'Select ICCID EF...'); return cmd('51', '33', 4000, 'A0A40000022FE2'); })
+          .then(function () { return wait(200); })
+          .then(function () { onStatus('Reading ICCID...', 'Reading binary data...'); return cmd('51', '33', 4000, 'A0B000000A'); })
+          .then(function (hex) {
+            if (hex.length < 40) throw new Error('Response too short for ICCID');
+            // Bytes 10–19 of the response frame hold the ICCID in semi-octet (nibble-swapped) BCD
+            var raw = hex.substring(20, 40);
+            var iccid = '';
+            for (var i = 0; i < raw.length; i += 2) iccid += raw[i + 1] + raw[i];
+            onStatus('Read Successful!', 'ICCID: ' + iccid);
+            return iccid;
+          });
       }
     };
   }
 
-  // Public Static Methods attached to constructor
-  MtkF31Controller.autoDetectPort = function (ports, onLog = console.log) {
-    onLog("Starting Auto-Detect scanning sequence...");
+  // ── Static: auto-detect which port has a dispenser ──────────────────────────
 
-    const ConnectionClass = window.SerialPortConnection;
-    if (!ConnectionClass) {
-      return Promise.reject(new Error("SerialPortConnection class is not defined. Please define it before calling autoDetectPort."));
+  /**
+   * @param {Array<{id,name}>} ports     from KioskBridge.listPorts()
+   * @param {Function}         openPort  (portId) => SerialPortConnection
+   * @param {Function}        [onLog]
+   * @returns {Promise<string>} resolved portId
+   */
+  MtkF31Controller.autoDetectPort = function (ports, openPort, onLog) {
+    onLog = onLog || console.log;
+    onLog('Auto-Detect: scanning ' + ports.length + ' port(s)...');
+
+    function probe(i) {
+      if (i >= ports.length) return Promise.reject(new Error('No responding dispenser found.'));
+      var portId = ports[i].id;
+      onLog('Probing ' + (i + 1) + '/' + ports.length + ': ' + portId + '...');
+      var conn;
+      try { conn = openPort(portId, { onLog: onLog }); }
+      catch (e) { onLog('Instantiation fail on ' + portId + ': ' + e.message, 'warn'); return probe(i + 1); }
+
+      var packet = buildPacket(0, CM_STATUS, PM_STATUS);
+      return wait(200).then(function () {
+        conn.clearBuffer();
+        conn.publish(packet);
+        return conn.readPacket(1200, validateFrame);
+      }).then(function (hex) {
+        conn.publish('06');
+        var res = parsePacket(hex);
+        conn.close();
+        if (res.success) { onLog('Dispenser found on: ' + portId); return portId; }
+        throw new Error('Negative response');
+      }).catch(function (e) {
+        onLog('Probe fail on ' + portId + ': ' + e.message, 'warn');
+        try { conn.close(); } catch (_) {}
+        return probe(i + 1);
+      });
     }
 
-    function probePort(index) {
-      if (index >= ports.length) {
-        return Promise.reject(new Error("No responding dispenser found. Please check connections."));
-      }
-
-      const portId = ports[index].id;
-      onLog(`Probing device ${index + 1}/${ports.length}: ${portId}...`);
-
-      let conn = null;
-      try {
-        conn = new ConnectionClass(portId, {
-          onLog: onLog,
-          onIncoming: function (incoming) {
-            if (incoming === "06") {
-              onLog("ACK (0x06) received and stripped.", "info");
-              return "";
-            }
-            return incoming;
-          }
-        });
-      } catch (e) {
-        onLog(`Probe instantiation fail on ${portId}: ${e.message}`, "warn");
-        return probePort(index + 1);
-      }
-
-      const activeConn = conn;
-      return new Promise(function (resolve) {
-        setTimeout(resolve, 200);
-      })
-        .then(function () {
-          const packet = buildPacket(0, CM_STATUS, PM_STATUS);
-          onLog(`[TX] Inquiry query: ${packet}`, "send");
-          activeConn.clearBuffer();
-          activeConn.publish(packet);
-
-          return activeConn.readPacket(1200, validateMtkPacket);
-        })
-        .then(function (responseHex) {
-          onLog(`[RX] Inquiry reply: ${responseHex}`, "recv");
-          activeConn.publish("06"); // ACK
-
-          const parseRes = parsePacket(responseHex);
-          if (parseRes.success) {
-            onLog(`Dispenser successfully found on: ${portId}`);
-            activeConn.close();
-            return portId;
-          }
-          throw new Error("Device response not positive");
-        })
-        .catch(function (e) {
-          onLog(`Probe timeout/fail on ${portId}: ${e.message}`, "warn");
-          activeConn.close();
-          return probePort(index + 1);
-        });
-    }
-
-    return probePort(0);
+    return probe(0);
   };
 
   return MtkF31Controller;
-})();
+}());
