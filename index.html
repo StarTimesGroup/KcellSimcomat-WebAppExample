@@ -111,7 +111,10 @@
         .btn-action:active { transform: scale(.99); }
         .btn-action:disabled { opacity: .4; pointer-events: none; }
     </style>
-
-
+    <script>
+        KioskBridge.init();
+        $('#btn-dispense').click(() => KioskBridge.Dispenser().dispense());
+        $('#btn-read-iccid').click(() => KioskBridge.Dispenser().readIccid());
+    </script>
 </body>
 </html>

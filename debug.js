@@ -1,8 +1,8 @@
 /**
  * debug.js — SIMCOMAT Developer Harness & UI wiring
  *
- * Wire up the debug UI buttons, dropdowns, and status elements.
- * Consumes the clean KioskBridge API.
+ * Exclusively handles background logging, port detection dropdowns,
+ * and visual status indicators. Contains no dispensing action logic.
  */
 $(document).ready(function () {
   'use strict';
@@ -11,10 +11,7 @@ $(document).ready(function () {
   KioskBridge.onLog(log);
   KioskBridge.onStatus(setStatus);
 
-  // 2. Initialize the KIOSK bridge
-  KioskBridge.init();
-
-  // 3. Setup port selector dropdown
+  // 2. Setup port selector dropdown
   loadPorts();
   $('#select-port').on('mousedown focus', loadPorts);
 
@@ -26,7 +23,7 @@ $(document).ready(function () {
     } else {
       localStorage.setItem('portId', val);
     }
-    log('Dispenser cache invalidated. Selected: ' + val);
+    log('Dispenser port selection updated: ' + val);
   });
 
   // Clear logs button
@@ -35,52 +32,7 @@ $(document).ready(function () {
     log('Logs cleared.');
   });
 
-  // ─── Button Actions ────────────────────────────────────────────────────────
-
-  $('#btn-dispense').click(function () {
-    if (!KioskBridge.isAvailable()) {
-      alert('KIOSK API not available.');
-      return;
-    }
-    lockUI();
-    var portId = getSelectedPort();
-    KioskBridge.Dispenser(portId).dispense()
-      .then(function () {
-        log('Dispense complete.');
-        setTimeout(resetUI, 2000);
-      })
-      .catch(function (e) {
-        log('Dispense failed: ' + e.message, 'error');
-        setStatus('Failed', e.message);
-        setTimeout(resetUI, 3000);
-      });
-  });
-
-  $('#btn-read-iccid').click(function () {
-    if (!KioskBridge.isAvailable()) {
-      alert('KIOSK API not available.');
-      return;
-    }
-    lockUI();
-    var portId = getSelectedPort();
-    KioskBridge.Dispenser(portId).readIccid()
-      .then(function (id) {
-        log('ICCID Read Success: ' + id);
-        setTimeout(resetUI, 3000);
-      })
-      .catch(function (e) {
-        log('Read failed: ' + e.message, 'error');
-        setStatus('Read Failed', e.message);
-        setTimeout(resetUI, 3000);
-      });
-  });
-
   // ─── UI Helper Actions ──────────────────────────────────────────────────────
-
-  function getSelectedPort() {
-    var val = $('#select-port').val();
-    return val === 'auto' ? null : val;
-  }
 
   function log(msg, type) {
     var colors = {
@@ -135,18 +87,4 @@ $(document).ready(function () {
     });
     $('#badge-label').text(avail ? 'JSAPI' : 'Preview');
   }
-
-  function lockUI() {
-    $('#btn-dispense, #btn-read-iccid, #select-port').prop('disabled', true);
-  }
-
-  function unlockUI() {
-    $('#btn-dispense, #btn-read-iccid, #select-port').prop('disabled', false);
-  }
-
-  function resetUI() {
-    unlockUI();
-    setStatus('Idle', 'Select a port and tap an action.');
-  }
-
 });
