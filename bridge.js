@@ -123,6 +123,19 @@
     return (p + bcc.toString(16).padStart(2,'0')).toUpperCase();
   }
 
+  var MTK_ERRORS = {
+    '01': 'Card Jam / Mechanical Blockage',
+    '02': 'Empty / No Card in hopper',
+    '03': 'Card pre-empty warning',
+    '04': 'Dispenser sensor error',
+    '60': 'IC card activation/reader module error',
+    '61': 'No card on IC contacts (Check SIM orientation/stacking)',
+    '62': 'IC card contacts short circuit',
+    '63': 'Unsupported IC card type',
+    '64': 'IC card communication error',
+    '65': 'IC card communication timeout'
+  };
+
   function _parsePacket(hex) {
     if (hex.startsWith('06')) hex = hex.substring(2);
     if (!hex.startsWith(STX) || hex.length < 14) return { ok: false, err: 'Bad frame' };
@@ -135,9 +148,16 @@
     if (bcc !== parseInt(pkt.slice(-2), 16)) return { ok: false, err: 'BCC mismatch' };
     var cmt = pkt.substr(8, 2);
     var ok = cmt === '50';
-    var err = ok ? null : ('Error: ' + (cmt === '4E' && pkt.length >= 18
-      ? String.fromCharCode(parseInt(pkt.substr(14,2),16)) + String.fromCharCode(parseInt(pkt.substr(16,2),16))
-      : cmt));
+    var err = null;
+    if (!ok) {
+      if (cmt === '4E' && pkt.length >= 18) {
+        var code = String.fromCharCode(parseInt(pkt.substr(14,2),16)) + String.fromCharCode(parseInt(pkt.substr(16,2),16));
+        var desc = MTK_ERRORS[code] || 'Hardware Error';
+        err = 'Error Code: ' + code + ' - ' + desc;
+      } else {
+        err = 'Negative response: ' + cmt;
+      }
+    }
     return { ok: ok, err: err, raw: pkt };
   }
 

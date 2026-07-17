@@ -21,8 +21,8 @@
     </style>
     <script>if (!window.__tw) { var l=document.createElement('link'); l.rel='stylesheet'; l.href='tailwind.min.css'; document.head.appendChild(l); }</script>
     <style>
-        /* Brand fallback for Tailwind v2 */
         .text-brand{color:#c5003e}.bg-brand{background-color:#c5003e}
+        .hover\:bg-brand-hover:hover{background-color:#a80032}
         .from-brand{--tw-gradient-from:#c5003e;--tw-gradient-stops:var(--tw-gradient-from),rgb(197 0 62/0)}
         .to-brand-hover{--tw-gradient-to:#a80032}
         .hover\:from-brand-light:hover{--tw-gradient-from:#ff4d79}
@@ -81,10 +81,10 @@
                 <div class="text-[13px] text-slate-500 mt-1 font-medium" id="status-sub">Select a port and tap an action.</div>
             </div>
 
-            <button id="btn-dispense"   class="btn-action bg-gradient-to-r from-brand to-brand-hover hover:from-brand-light hover:to-brand">Dispense SIM</button>
-            <button id="btn-read-iccid" class="btn-action bg-gradient-to-r from-indigo-600 to-indigo-800 hover:from-indigo-500 hover:to-indigo-600">Read ICCID</button>
-            <a href="https://sim.fabtech.uz"       class="btn-action bg-gradient-to-r from-brand to-brand-hover hover:from-brand-light hover:to-brand text-center">Demo Flow</a>
-            <a href="https://activ.kz/new-number"  class="btn-action bg-gradient-to-r from-brand to-brand-hover hover:from-brand-light hover:to-brand text-center">activ.kz / new number</a>
+            <button id="btn-dispense"   class="btn-action bg-brand hover:bg-brand-hover text-white">Dispense SIM</button>
+            <button id="btn-read-iccid" class="btn-action bg-indigo-600 hover:bg-indigo-700 text-white">Read ICCID</button>
+            <a href="https://sim.fabtech.uz"       class="btn-action bg-brand hover:bg-brand-hover text-white">Demo Flow</a>
+            <a href="https://activ.kz/new-number"  class="btn-action bg-brand hover:bg-brand-hover text-white">activ.kz / new number</a>
         </div>
 
         <!-- Device Logs -->
