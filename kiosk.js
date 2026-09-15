@@ -116,7 +116,48 @@
     onStatus: function (fn) { KioskBridge._statusFn = fn; },
     
     /** Promisified sleep helper */
-    wait: function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    wait: function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); },
+
+    /** Thermal Receipt Printer API */
+    Printer: function () {
+      return {
+        printDemo: function (qrUrl) {
+          if (global.AndroidBridge && global.AndroidBridge.printDemoReceipt) {
+            try {
+              var raw = global.AndroidBridge.printDemoReceipt(qrUrl || '');
+              var res = typeof raw === 'string' ? JSON.parse(raw) : raw;
+              if (res && res.success) {
+                if (KioskBridge._logFn) KioskBridge._logFn('Demo check with QR printed successfully', 'Printer');
+                return Promise.resolve(res);
+              } else {
+                var errMsg = (res && res.error) ? res.error : 'Unknown printer error';
+                if (KioskBridge._logFn) KioskBridge._logFn('Print failed: ' + errMsg, 'Printer');
+                return Promise.reject(new Error(errMsg));
+              }
+            } catch (e) {
+              if (KioskBridge._logFn) KioskBridge._logFn('Print error: ' + e.message, 'Printer');
+              return Promise.reject(e);
+            }
+          } else {
+            if (KioskBridge._logFn) KioskBridge._logFn('Preview mode: demo check simulated with QR', 'Printer');
+            return Promise.resolve({ success: true, preview: true });
+          }
+        },
+        printHex: function (hexPayload) {
+          if (global.AndroidBridge && global.AndroidBridge.printHex) {
+            try {
+              var raw = global.AndroidBridge.printHex(hexPayload || '');
+              var res = typeof raw === 'string' ? JSON.parse(raw) : raw;
+              return res && res.success ? Promise.resolve(res) : Promise.reject(new Error(res ? res.error : 'Print error'));
+            } catch (e) {
+              return Promise.reject(e);
+            }
+          } else {
+            return Promise.resolve({ success: true, preview: true });
+          }
+        }
+      };
+    }
   };
 
   global.KioskBridge = KioskBridge;
