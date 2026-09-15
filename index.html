@@ -36,10 +36,10 @@
     </style>
 
     <!-- Kiosk Bridge Layers -->
-    <script src="kiosk.js"></script>
-    <script src="mtk.js"></script>
+    <script src="kiosk.js?v=2.2.0"></script>
+    <script src="mtk.js?v=2.2.0"></script>
     <!-- UI Debug Harness -->
-    <script src="debug.js"></script>
+    <script src="debug.js?v=2.2.0"></script>
 </head>
 
 <body class="bg-slate-100 font-sans text-slate-900 overflow-hidden flex flex-col h-screen w-screen">
@@ -175,7 +175,30 @@
                 $('#status-sub').text('Sending ESC/POS command with QR code to thermal printer.');
                 console.log('[Printer] Printing demo check with QR code...');
 
-                KioskBridge.Printer().printDemo('https://activ.kz/new-number')
+                var printPromise;
+                if (window.KioskBridge && typeof window.KioskBridge.Printer === 'function') {
+                    printPromise = window.KioskBridge.Printer().printDemo('https://activ.kz/new-number');
+                } else if (window.KIOSK && window.KIOSK.printer && typeof window.KIOSK.printer.printDemo === 'function') {
+                    try {
+                        var res = window.KIOSK.printer.printDemo('https://activ.kz/new-number');
+                        printPromise = (res && res.success) ? Promise.resolve(res) : Promise.reject(new Error(res ? res.error : 'Print error'));
+                    } catch (err) {
+                        printPromise = Promise.reject(err);
+                    }
+                } else if (window.AndroidBridge && typeof window.AndroidBridge.printDemoReceipt === 'function') {
+                    try {
+                        var raw = window.AndroidBridge.printDemoReceipt('https://activ.kz/new-number');
+                        var res = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                        printPromise = (res && res.success) ? Promise.resolve(res) : Promise.reject(new Error(res ? res.error : 'Print error'));
+                    } catch (err) {
+                        printPromise = Promise.reject(err);
+                    }
+                } else {
+                    console.log('[Printer] Preview mode: demo receipt simulated');
+                    printPromise = Promise.resolve({ success: true, preview: true });
+                }
+
+                printPromise
                     .then(function (result) {
                         console.log('[Printer] Demo check printed successfully!');
                         $('#status-title').text('Status: Check Printed');
