@@ -29,6 +29,8 @@
         .hover\:to-brand:hover{--tw-gradient-to:#c5003e}
         .bg-printer, #btn-print { background-color: #059669 !important; color: #ffffff !important; }
         .bg-printer:hover, #btn-print:hover { background-color: #047857 !important; }
+        .bg-scanner, #btn-scan-passport { background-color: #0284c7 !important; color: #ffffff !important; }
+        .bg-scanner:hover, #btn-scan-passport:hover { background-color: #0369a1 !important; }
         * { user-select: none; }
         body { overflow: hidden; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; }
@@ -89,6 +91,10 @@
             <button id="btn-print"      class="btn-action bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2">
                 <svg style="height:18px;width:18px;fill:currentColor" viewBox="0 0 24 24"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg>
                 <span>Print Demo Check (QR)</span>
+            </button>
+            <button id="btn-scan-passport" class="btn-action bg-scanner text-white flex items-center justify-center gap-2">
+                <svg style="height:18px;width:18px;fill:currentColor" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 3c1.93 0 3.5 1.57 3.5 3.5S13.93 13 12 13s-3.5-1.57-3.5-3.5S10.07 6 12 6zm7 13H5v-.23c0-.62.28-1.2.76-1.58C7.47 15.82 9.64 15 12 15s4.53.82 6.24 2.19c.48.38.76.97.76 1.58V19z"/></svg>
+                <span>Scan Passport / ID</span>
             </button>
             <a href="https://sim.fabtech.uz"       class="btn-action bg-brand hover:bg-brand-hover text-white">Demo Flow</a>
             <a href="https://activ.kz/new-number"  class="btn-action bg-brand hover:bg-brand-hover text-white">activ.kz / new number</a>
@@ -210,6 +216,65 @@
                         console.error('[Printer] Print failed:', error.message || error);
                         $('#status-title').text('Status: Print Error');
                         $('#status-sub').text(error.message || 'Thermal printer error');
+                    })
+                    .finally(function () {
+                        $btn.prop('disabled', false);
+                    });
+            });
+
+            // 6. Wire Scan Passport Action
+            $('#btn-scan-passport').click(function () {
+                var $btn = $(this);
+                $btn.prop('disabled', true);
+                $('#status-title').text('Status: Scanning Passport...');
+                $('#status-sub').text('Place document on scanner glass. Initializing sensor...');
+                console.log('[Scanner] Starting document scan & recognition...');
+
+                var scanPromise;
+                if (window.KioskBridge && typeof window.KioskBridge.Passport === 'function') {
+                    scanPromise = window.KioskBridge.Passport().scan();
+                } else if (window.KIOSK && window.KIOSK.passport && typeof window.KIOSK.passport.scan === 'function') {
+                    try {
+                        var res = window.KIOSK.passport.scan();
+                        scanPromise = (res && res.success) ? Promise.resolve(res) : Promise.reject(new Error(res ? res.error : 'Scan error'));
+                    } catch (err) {
+                        scanPromise = Promise.reject(err);
+                    }
+                } else if (window.AndroidBridge && typeof window.AndroidBridge.scanPassport === 'function') {
+                    try {
+                        var raw = window.AndroidBridge.scanPassport();
+                        var res = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                        scanPromise = (res && res.success) ? Promise.resolve(res) : Promise.reject(new Error(res ? res.error : 'Scan error'));
+                    } catch (err) {
+                        scanPromise = Promise.reject(err);
+                    }
+                } else {
+                    console.log('[Scanner] Preview mode: simulated document scan');
+                    scanPromise = Promise.resolve({
+                        success: true,
+                        preview: true,
+                        cardType: 'PASSPORT',
+                        fullName: 'DEMO CUSTOMER',
+                        documentNumber: 'N12345678',
+                        birthDate: '1995-05-15',
+                        expiryDate: '2035-05-14',
+                        nationality: 'KAZ'
+                    });
+                }
+
+                scanPromise
+                    .then(function (result) {
+                        console.log('[Scanner] Scan successful:', JSON.stringify(result));
+                        $('#status-title').text('Status: Document Scanned');
+                        var info = result.cardType || 'Document recognized';
+                        if (result.documentNumber) info += ' [' + result.documentNumber + ']';
+                        if (result.fullName) info += ' - ' + result.fullName;
+                        $('#status-sub').text(info);
+                    })
+                    .catch(function (error) {
+                        console.error('[Scanner] Scan failed:', error.message || error);
+                        $('#status-title').text('Status: Scan Error');
+                        $('#status-sub').text(error.message || 'Passport scanner error');
                     })
                     .finally(function () {
                         $btn.prop('disabled', false);

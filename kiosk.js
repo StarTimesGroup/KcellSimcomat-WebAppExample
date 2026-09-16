@@ -157,6 +157,46 @@
           }
         }
       };
+    },
+
+    /** Passport and ID Card Scanner API */
+    Passport: function () {
+      return {
+        scan: function () {
+          if (global.AndroidBridge && global.AndroidBridge.scanPassport) {
+            try {
+              var raw = global.AndroidBridge.scanPassport();
+              var res = typeof raw === 'string' ? JSON.parse(raw) : raw;
+              if (res && res.success) {
+                if (KioskBridge._logFn) KioskBridge._logFn('Document scanned: ' + (res.fullName || res.cardType || 'OK'), 'Passport');
+                return Promise.resolve(res);
+              } else {
+                var errMsg = (res && res.error) ? res.error : 'Document scan failed';
+                if (KioskBridge._logFn) KioskBridge._logFn('Scan failed: ' + errMsg, 'Passport');
+                return Promise.reject(new Error(errMsg));
+              }
+            } catch (e) {
+              if (KioskBridge._logFn) KioskBridge._logFn('Passport scan error: ' + e.message, 'Passport');
+              return Promise.reject(e);
+            }
+          } else {
+            // Browser preview mode
+            if (KioskBridge._logFn) KioskBridge._logFn('Preview mode: simulated passport scan', 'Passport');
+            return Promise.resolve({
+              success: true,
+              preview: true,
+              cardType: 'PASSPORT',
+              fullName: 'DEMO CUSTOMER',
+              documentNumber: 'N12345678',
+              birthDate: '1995-05-15',
+              expiryDate: '2035-05-14',
+              nationality: 'KAZ',
+              gender: 'M',
+              mrz: 'P<KAZDEMO<<CUSTOMER<<<<<<<<<<<<<<<<<<<<<<<\nN123456781KAZ9505152M3505146<<<<<<<<<<<<<<04'
+            });
+          }
+        }
+      };
     }
   };
 
